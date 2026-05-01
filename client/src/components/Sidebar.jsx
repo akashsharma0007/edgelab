@@ -75,7 +75,7 @@ function MatchCard({ event, isSoccer, onSend }) {
   )
 }
 
-export default function Sidebar({ session, onSend }) {
+export default function Sidebar({ session, onSend, token }) {
   const [fixtures, setFixtures] = useState([])
   const [loading, setLoading] = useState(true)
   const [expanded, setExpanded] = useState({})
@@ -84,11 +84,13 @@ export default function Sidebar({ session, onSend }) {
     loadFixtures()
     const iv = setInterval(loadFixtures, 10 * 60 * 1000)
     return () => clearInterval(iv)
-  }, [])
+  }, [token])
 
   async function loadFixtures() {
     try {
-      const res  = await fetch('/api/fixtures')
+      const res  = await fetch('/api/fixtures', {
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+      })
       const data = await res.json()
       setFixtures(data.fixtures || [])
       // auto-expand first two leagues

@@ -9,7 +9,7 @@ const SPORTS = [
   { id: 'ufc',      label: 'UFC / Boxing',  icon: '🥊' },
 ]
 
-export default function Header({ session, activeSport, setActiveSport, onSportClick }) {
+export default function Header({ session, activeSport, setActiveSport, onSportClick, user, onLogout, onFeedback }) {
   const [serverStatus, setServerStatus] = useState(null)
 
   useEffect(() => {
@@ -54,19 +54,11 @@ export default function Header({ session, activeSport, setActiveSport, onSportCl
 
       <div className="header-right">
         {isDemo ? (
-          <div
-            className="demo-badge"
-            title="Add GROQ_API_KEY to .env for free live AI — console.groq.com"
-            style={{ cursor: 'help' }}
-          >
+          <div className="demo-badge" title="Add CF_ACCOUNT_ID + CF_API_TOKEN to .env for free live AI" style={{ cursor: 'help' }}>
             ⚡ Demo · Get Free AI ↗
           </div>
         ) : (
-          <div className="demo-badge" style={{
-            background: 'var(--green-dim)',
-            borderColor: 'rgba(0,230,118,0.25)',
-            color: 'var(--green)',
-          }}>
+          <div className="demo-badge" style={{ background: 'var(--green-dim)', borderColor: 'rgba(0,230,118,0.25)', color: 'var(--green)' }}>
             🤖 Cloudflare AI · ESPN Live
           </div>
         )}
@@ -81,18 +73,25 @@ export default function Header({ session, activeSport, setActiveSport, onSportCl
             <div className="bankroll-val">
               ${session.bankroll.toFixed(0)}
               {session.pl !== 0 && (
-                <span style={{
-                  fontSize: 11,
-                  marginLeft: 4,
-                  color: plPositive ? 'var(--green)' : 'var(--red)',
-                  fontWeight: 600,
-                }}>
+                <span style={{ fontSize: 11, marginLeft: 4, color: plPositive ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}>
                   {plText}
                 </span>
               )}
             </div>
             <div className="bankroll-lbl">Session bankroll</div>
           </div>
+        )}
+
+        {onFeedback && (
+          <button className="header-icon-btn" onClick={onFeedback} title="Suggest an improvement">
+            💡
+          </button>
+        )}
+
+        {user && onLogout && (
+          <button className="header-icon-btn logout-btn" onClick={onLogout} title={`Logout (${user})`}>
+            {user.slice(0, 1).toUpperCase()} ↩
+          </button>
         )}
       </div>
     </header>

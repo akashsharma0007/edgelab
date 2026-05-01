@@ -2,11 +2,70 @@ require('dotenv').config();
 const express = require('express');
 const cors    = require('cors');
 const path    = require('path');
+const crypto  = require('crypto');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ─── AUTH + FEEDBACK ──────────────────────────────────────────────────────────
+const sessions     = new Map(); // token → { user, createdAt }
+const feedbackStore = [];       // [{ id, category, text, user, createdAt }]
+
+function generateToken() {
+  return crypto.randomBytes(24).toString('hex');
+}
+
+function authMiddleware(req, res, next) {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
+  const token = auth.slice(7);
+  if (!sessions.has(token)) return res.status(401).json({ error: 'Session expired' });
+  req.user = sessions.get(token);
+  next();
+}
+
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body || {};
+  const validUser = process.env.APP_USERNAME || 'akash';
+  const validPass = process.env.APP_PASSWORD || 'edgelab2024';
+  if (!username || !password || username !== validUser || password !== validPass) {
+    return res.status(401).json({ error: 'Invalid username or password' });
+  }
+  const token = generateToken();
+  sessions.set(token, { user: username, createdAt: Date.now() });
+  res.json({ token, user: username });
+});
+
+app.post('/api/logout', authMiddleware, (req, res) => {
+  const token = req.headers.authorization.slice(7);
+  sessions.delete(token);
+  res.json({ ok: true });
+});
+
+app.get('/api/verify', authMiddleware, (req, res) => {
+  res.json({ ok: true, user: req.user.user });
+});
+
+app.post('/api/feedback', authMiddleware, (req, res) => {
+  const { category, text } = req.body || {};
+  if (!text || text.trim().length < 3) return res.status(400).json({ error: 'Feedback too short' });
+  const entry = {
+    id: Date.now(),
+    category: category || 'General',
+    text: text.trim(),
+    user: req.user.user,
+    createdAt: new Date().toISOString(),
+  };
+  feedbackStore.push(entry);
+  console.log(`[Feedback] ${entry.category}: ${entry.text.slice(0, 80)}`);
+  res.json({ ok: true, id: entry.id });
+});
+
+app.get('/api/feedback', authMiddleware, (_req, res) => {
+  res.json({ feedback: feedbackStore });
+});
 
 const CF_ACCOUNT_ID = process.env.CF_ACCOUNT_ID;
 const CF_API_TOKEN  = process.env.CF_API_TOKEN;
@@ -510,7 +569,7 @@ const LEAGUE_FOOTYBITE = {
 }
 
 // ─── FIXTURES ENDPOINT ───────────────────────────────────────────────────────
-app.get('/api/fixtures', async (_req, res) => {
+app.get('/api/fixtures', authMiddleware, async (_req, res) => {
   try {
     const raw = await getLiveFixtures()
     const enriched = raw.map(league => {
@@ -533,7 +592,7 @@ app.get('/api/fixtures', async (_req, res) => {
 })
 
 // ─── CHAT ENDPOINT ────────────────────────────────────────────────────────────
-app.post('/api/chat', async (req, res) => {
+app.post('/api/chat', authMiddleware, async (req, res) => {
   try {
     const { messages } = req.body;
     const lastMsg = messages[messages.length - 1]?.content || '';
@@ -555,6 +614,13 @@ app.post('/api/chat', async (req, res) => {
       }
     }
 
+    // Append user feedback as improvement instructions
+    let feedbackContext = '';
+    if (feedbackStore.length > 0) {
+      const recent = feedbackStore.slice(-8).map(f => `- [${f.category}] ${f.text}`).join('\n');
+      feedbackContext = `\n\n═══════════════════════════════════════\nUSER IMPROVEMENT REQUESTS (apply these always):\n${recent}\n═══════════════════════════════════════`;
+    }
+
     // Cloudflare Workers AI — free tier, Llama 3.3-70b
     const cfUrl = `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast`;
 
@@ -567,7 +633,7 @@ app.post('/api/chat', async (req, res) => {
       body: JSON.stringify({
         max_tokens: 2048,
         messages: [
-          { role: 'system', content: EDGELAB_SYSTEM_PROMPT + fixtureContext },
+          { role: 'system', content: EDGELAB_SYSTEM_PROMPT + fixtureContext + feedbackContext },
           ...messages,
         ],
       }),
