@@ -1,0 +1,19 @@
+# dependencies
+node_modules/
+client/node_modules/
+
+# environment — NEVER commit credentials
+.env
+.env.local
+.env.production
+
+# logs
+*.log
+npm-debug.log*
+
+# IDE / tool config
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
