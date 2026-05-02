@@ -5,12 +5,14 @@ const path    = require('path');
 const crypto  = require('crypto');
 
 // ─── AI PROVIDER CONFIG ───────────────────────────────────────────────────────
+const GROQ_API_KEY    = process.env.GROQ_API_KEY;
 const GEMINI_API_KEY  = process.env.GEMINI_API_KEY;
 const CF_ACCOUNT_ID   = process.env.CF_ACCOUNT_ID;
 const CF_API_TOKEN    = process.env.CF_API_TOKEN;
 
-const USE_GEMINI = !!GEMINI_API_KEY && GEMINI_API_KEY !== 'your_gemini_key_here';
-const USE_CF     = !USE_GEMINI && !!CF_ACCOUNT_ID && !!CF_API_TOKEN
+const USE_GROQ   = !!GROQ_API_KEY   && GROQ_API_KEY   !== 'your_groq_key_here';
+const USE_GEMINI = !USE_GROQ && !!GEMINI_API_KEY && GEMINI_API_KEY !== 'your_gemini_key_here';
+const USE_CF     = !USE_GROQ && !USE_GEMINI && !!CF_ACCOUNT_ID && !!CF_API_TOKEN
   && CF_ACCOUNT_ID !== 'your_account_id_here'
   && CF_API_TOKEN  !== 'your_api_token_here';
 
@@ -77,7 +79,7 @@ app.get('/api/feedback', authMiddleware, (_req, res) => {
   res.json({ feedback: feedbackStore });
 });
 
-const DEMO_MODE = !USE_GEMINI && !USE_CF;
+const DEMO_MODE = !USE_GROQ && !USE_GEMINI && !USE_CF;
 
 // ─── ESPN LIVE FIXTURE FEED (no API key needed) ───────────────────────────────
 const fixtureCache = { data: null, ts: 0 };
@@ -599,6 +601,23 @@ app.get('/api/fixtures', authMiddleware, async (_req, res) => {
 
 // ─── AI CALL FUNCTIONS ────────────────────────────────────────────────────────
 
+async function callGroq(systemPrompt, messages) {
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      max_tokens: 2048,
+      temperature: 0.7,
+      messages: [{ role: 'system', content: systemPrompt }, ...messages],
+    }),
+    signal: AbortSignal.timeout(30000),
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message || 'Groq error');
+  return data.choices[0].message.content;
+}
+
 async function callGemini(systemPrompt, messages) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
 
@@ -682,7 +701,9 @@ app.post('/api/chat', authMiddleware, async (req, res) => {
     const systemPrompt = EDGELAB_SYSTEM_PROMPT + fixtureContext + feedbackContext;
     let reply = '';
 
-    if (USE_GEMINI) {
+    if (USE_GROQ) {
+      reply = await callGroq(systemPrompt, messages);
+    } else if (USE_GEMINI) {
       reply = await callGemini(systemPrompt, messages);
     } else {
       reply = await callCloudflare(systemPrompt, messages);
@@ -699,6 +720,7 @@ app.post('/api/chat', authMiddleware, async (req, res) => {
 // ─── STATUS ENDPOINT ──────────────────────────────────────────────────────────
 app.get('/api/status', (_req, res) => {
   const model = DEMO_MODE ? 'demo'
+    : USE_GROQ   ? 'Llama 3.3-70b (Groq)'
     : USE_GEMINI ? 'Gemini 2.0 Flash + Google Search'
     : 'Llama 3.3-70b (Cloudflare AI)';
   res.json({ demo: DEMO_MODE, model });
@@ -711,7 +733,8 @@ app.get('/{*path}', (_req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`EdgeLab running on http://localhost:${PORT}`);
-  if (DEMO_MODE)    console.log('⚠️  Demo mode — add GEMINI_API_KEY to .env for live AI with Google Search');
-  else if (USE_GEMINI) console.log('✅  Gemini 2.0 Flash + Google Search grounding + ESPN live fixtures');
-  else               console.log('✅  Cloudflare Workers AI + ESPN live fixtures');
+  if (DEMO_MODE)       console.log('⚠️  Demo mode — add GROQ_API_KEY to .env for live AI');
+  else if (USE_GROQ)   console.log('✅  Groq Llama 3.3-70b + ESPN live fixtures');
+  else if (USE_GEMINI) console.log('✅  Gemini 2.0 Flash + Google Search + ESPN live fixtures');
+  else                 console.log('✅  Cloudflare Workers AI + ESPN live fixtures');
 });
