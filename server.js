@@ -4,6 +4,16 @@ const cors    = require('cors');
 const path    = require('path');
 const crypto  = require('crypto');
 
+// ─── AI PROVIDER CONFIG ───────────────────────────────────────────────────────
+const GEMINI_API_KEY  = process.env.GEMINI_API_KEY;
+const CF_ACCOUNT_ID   = process.env.CF_ACCOUNT_ID;
+const CF_API_TOKEN    = process.env.CF_API_TOKEN;
+
+const USE_GEMINI = !!GEMINI_API_KEY && GEMINI_API_KEY !== 'your_gemini_key_here';
+const USE_CF     = !USE_GEMINI && !!CF_ACCOUNT_ID && !!CF_API_TOKEN
+  && CF_ACCOUNT_ID !== 'your_account_id_here'
+  && CF_API_TOKEN  !== 'your_api_token_here';
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -67,11 +77,7 @@ app.get('/api/feedback', authMiddleware, (_req, res) => {
   res.json({ feedback: feedbackStore });
 });
 
-const CF_ACCOUNT_ID = process.env.CF_ACCOUNT_ID;
-const CF_API_TOKEN  = process.env.CF_API_TOKEN;
-const DEMO_MODE     = !CF_ACCOUNT_ID || !CF_API_TOKEN
-  || CF_ACCOUNT_ID === 'your_account_id_here'
-  || CF_API_TOKEN  === 'your_api_token_here';
+const DEMO_MODE = !USE_GEMINI && !USE_CF;
 
 // ─── ESPN LIVE FIXTURE FEED (no API key needed) ───────────────────────────────
 const fixtureCache = { data: null, ts: 0 };
@@ -591,6 +597,58 @@ app.get('/api/fixtures', authMiddleware, async (_req, res) => {
   }
 })
 
+// ─── AI CALL FUNCTIONS ────────────────────────────────────────────────────────
+
+async function callGemini(systemPrompt, messages) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+
+  // Gemini needs alternating user/model turns
+  const geminiMsgs = [];
+  for (const m of messages) {
+    const role = m.role === 'assistant' ? 'model' : 'user';
+    const last = geminiMsgs[geminiMsgs.length - 1];
+    if (last && last.role === role) {
+      last.parts[0].text += '\n' + m.content;
+    } else {
+      geminiMsgs.push({ role, parts: [{ text: m.content }] });
+    }
+  }
+  if (geminiMsgs[0]?.role === 'model') {
+    geminiMsgs.unshift({ role: 'user', parts: [{ text: '(start)' }] });
+  }
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      system_instruction: { parts: [{ text: systemPrompt }] },
+      contents: geminiMsgs,
+      tools: [{ google_search: {} }],
+      generationConfig: { maxOutputTokens: 2048, temperature: 0.7 },
+    }),
+    signal: AbortSignal.timeout(30000),
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message || 'Gemini error');
+  return data.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || '';
+}
+
+async function callCloudflare(systemPrompt, messages) {
+  const cfUrl = `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast`;
+  const res = await fetch(cfUrl, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${CF_API_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      max_tokens: 2048,
+      messages: [{ role: 'system', content: systemPrompt }, ...messages],
+    }),
+    signal: AbortSignal.timeout(30000),
+  });
+  const data = await res.json();
+  if (!data.success) throw new Error(data.errors?.[0]?.message || 'Cloudflare AI error');
+  return data.result.response;
+}
+
 // ─── CHAT ENDPOINT ────────────────────────────────────────────────────────────
 app.post('/api/chat', authMiddleware, async (req, res) => {
   try {
@@ -602,7 +660,7 @@ app.post('/api/chat', authMiddleware, async (req, res) => {
       return res.json({ message: getDemoReply(lastMsg) });
     }
 
-    // Fetch live SofaScore fixtures when user asks about games/picks
+    // ESPN fixture context
     let fixtureContext = '';
     const wantsFixtures = /today|card|fixture|match|game|on now|pick|parlay|favor|recommend|weekend|saturday|sunday/i.test(lastMsg);
     if (wantsFixtures) {
@@ -614,51 +672,36 @@ app.post('/api/chat', authMiddleware, async (req, res) => {
       }
     }
 
-    // Append user feedback as improvement instructions
+    // User feedback suggestions
     let feedbackContext = '';
     if (feedbackStore.length > 0) {
       const recent = feedbackStore.slice(-8).map(f => `- [${f.category}] ${f.text}`).join('\n');
       feedbackContext = `\n\n═══════════════════════════════════════\nUSER IMPROVEMENT REQUESTS (apply these always):\n${recent}\n═══════════════════════════════════════`;
     }
 
-    // Cloudflare Workers AI — free tier, Llama 3.3-70b
-    const cfUrl = `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast`;
+    const systemPrompt = EDGELAB_SYSTEM_PROMPT + fixtureContext + feedbackContext;
+    let reply = '';
 
-    const response = await fetch(cfUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${CF_API_TOKEN}`,
-        'Content-Type':  'application/json',
-      },
-      body: JSON.stringify({
-        max_tokens: 2048,
-        messages: [
-          { role: 'system', content: EDGELAB_SYSTEM_PROMPT + fixtureContext + feedbackContext },
-          ...messages,
-        ],
-      }),
-    });
-
-    const data = await response.json();
-
-    if (!data.success) {
-      const errMsg = data.errors?.[0]?.message || 'Cloudflare AI error';
-      return res.status(400).json({ error: errMsg });
+    if (USE_GEMINI) {
+      reply = await callGemini(systemPrompt, messages);
+    } else {
+      reply = await callCloudflare(systemPrompt, messages);
     }
 
-    res.json({
-      message: data.result.response,
-    });
+    res.json({ message: reply });
 
   } catch (error) {
-    console.error('API Error:', error);
-    res.status(500).json({ error: 'Server error. Please try again.' });
+    console.error('API Error:', error.message);
+    res.status(500).json({ error: 'AI error: ' + error.message });
   }
 });
 
 // ─── STATUS ENDPOINT ──────────────────────────────────────────────────────────
 app.get('/api/status', (_req, res) => {
-  res.json({ demo: DEMO_MODE, model: DEMO_MODE ? 'demo' : 'llama-3.3-70b (Cloudflare AI) + ESPN Live Data' });
+  const model = DEMO_MODE ? 'demo'
+    : USE_GEMINI ? 'Gemini 2.0 Flash + Google Search'
+    : 'Llama 3.3-70b (Cloudflare AI)';
+  res.json({ demo: DEMO_MODE, model });
 });
 
 app.get('/{*path}', (_req, res) => {
@@ -668,7 +711,7 @@ app.get('/{*path}', (_req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`EdgeLab running on http://localhost:${PORT}`);
-  console.log(DEMO_MODE
-    ? '⚠️  Demo mode — add CF_ACCOUNT_ID + CF_API_TOKEN to .env for live AI + SofaScore data'
-    : '✅  Live mode — Cloudflare Workers AI + ESPN live fixtures active');
+  if (DEMO_MODE)    console.log('⚠️  Demo mode — add GEMINI_API_KEY to .env for live AI with Google Search');
+  else if (USE_GEMINI) console.log('✅  Gemini 2.0 Flash + Google Search grounding + ESPN live fixtures');
+  else               console.log('✅  Cloudflare Workers AI + ESPN live fixtures');
 });
