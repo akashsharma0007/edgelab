@@ -5,11 +5,11 @@ const path    = require('path');
 const crypto  = require('crypto');
 
 // ─── AI PROVIDER CONFIG ───────────────────────────────────────────────────────
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const GROQ_API_KEY       = process.env.GROQ_API_KEY;
-const GEMINI_API_KEY     = process.env.GEMINI_API_KEY;
-const CF_ACCOUNT_ID      = process.env.CF_ACCOUNT_ID;
-const CF_API_TOKEN       = process.env.CF_API_TOKEN;
+const OPENROUTER_API_KEY = (process.env.OPENROUTER_API_KEY || '').trim();
+const GROQ_API_KEY       = (process.env.GROQ_API_KEY       || '').trim();
+const GEMINI_API_KEY     = (process.env.GEMINI_API_KEY     || '').trim();
+const CF_ACCOUNT_ID      = (process.env.CF_ACCOUNT_ID      || '').trim();
+const CF_API_TOKEN       = (process.env.CF_API_TOKEN       || '').trim();
 
 const USE_OPENROUTER = !!OPENROUTER_API_KEY && OPENROUTER_API_KEY !== 'your_openrouter_key_here';
 const USE_GROQ       = !USE_OPENROUTER && !!GROQ_API_KEY && GROQ_API_KEY !== 'your_groq_key_here';
