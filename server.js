@@ -11,10 +11,11 @@ const GEMINI_API_KEY     = (process.env.GEMINI_API_KEY     || '').trim();
 const CF_ACCOUNT_ID      = (process.env.CF_ACCOUNT_ID      || '').trim();
 const CF_API_TOKEN       = (process.env.CF_API_TOKEN       || '').trim();
 
+// Each flag is independent — all configured providers are tried in order as fallbacks
 const USE_OPENROUTER = !!OPENROUTER_API_KEY && OPENROUTER_API_KEY !== 'your_openrouter_key_here';
-const USE_GROQ       = !USE_OPENROUTER && !!GROQ_API_KEY && GROQ_API_KEY !== 'your_groq_key_here';
-const USE_GEMINI     = !USE_OPENROUTER && !USE_GROQ && !!GEMINI_API_KEY && GEMINI_API_KEY !== 'your_gemini_key_here';
-const USE_CF         = !USE_OPENROUTER && !USE_GROQ && !USE_GEMINI && !!CF_ACCOUNT_ID && !!CF_API_TOKEN
+const USE_GROQ       = !!GROQ_API_KEY && GROQ_API_KEY !== 'your_groq_key_here';
+const USE_GEMINI     = !!GEMINI_API_KEY && GEMINI_API_KEY !== 'your_gemini_key_here';
+const USE_CF         = !!CF_ACCOUNT_ID && !!CF_API_TOKEN
   && CF_ACCOUNT_ID !== 'your_account_id_here'
   && CF_API_TOKEN  !== 'your_api_token_here';
 
