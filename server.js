@@ -722,7 +722,7 @@ app.post('/api/chat', authMiddleware, async (req, res) => {
 
     // ESPN fixture context
     let fixtureContext = '';
-    const wantsFixtures = /today|card|fixture|match|game|on now|pick|parlay|favor|recommend|weekend|saturday|sunday/i.test(lastMsg);
+    const wantsFixtures = /today|card|fixture|match|game|on now|pick|parlay|favor|recommend|weekend|saturday|sunday|ipl|cricket|t20|odi/i.test(lastMsg);
     if (wantsFixtures) {
       try {
         const fixtures = await getLiveFixtures();
@@ -730,6 +730,18 @@ app.post('/api/chat', authMiddleware, async (req, res) => {
       } catch (e) {
         console.error('Fixture fetch error:', e.message);
       }
+      // Supplement with TheSportsDB for cricket (no API key needed)
+      try {
+        const today = new Date().toISOString().split('T')[0];
+        const sdbRes = await fetch(`https://www.thesportsdb.com/api/v1/json/3/eventsday.php?d=${today}&s=Cricket`, { signal: AbortSignal.timeout(5000) });
+        const sdbData = await sdbRes.json();
+        if (sdbData.events?.length) {
+          const lines = sdbData.events.slice(0, 10).map(e =>
+            `  ${e.strTime || '??:??'} | ${e.strHomeTeam} vs ${e.strAwayTeam} | ${e.strLeague}`
+          );
+          fixtureContext += `\n\n=== CRICKET TODAY (TheSportsDB) ===\n${lines.join('\n')}\n=== END ===`;
+        }
+      } catch (e) { /* silent */ }
     }
 
     // User feedback suggestions
@@ -742,21 +754,32 @@ app.post('/api/chat', authMiddleware, async (req, res) => {
     const systemPrompt = EDGELAB_SYSTEM_PROMPT + fixtureContext + feedbackContext;
     let reply = '';
 
-    if (USE_OPENROUTER) {
-      reply = await callOpenRouter(systemPrompt, messages);
-    } else if (USE_GROQ) {
-      reply = await callGroq(systemPrompt, messages);
-    } else if (USE_GEMINI) {
-      reply = await callGemini(systemPrompt, messages);
-    } else {
-      reply = await callCloudflare(systemPrompt, messages);
+    // Try each provider in order, fall through to next on failure
+    const providers = [
+      USE_OPENROUTER && (() => callOpenRouter(systemPrompt, messages)),
+      USE_GROQ       && (() => callGroq(systemPrompt, messages)),
+      USE_GEMINI     && (() => callGemini(systemPrompt, messages)),
+      USE_CF         && (() => callCloudflare(systemPrompt, messages)),
+    ].filter(Boolean);
+
+    for (const provider of providers) {
+      try {
+        reply = await provider();
+        if (reply) break;
+      } catch (e) {
+        console.warn('Provider failed, trying next:', e.message);
+      }
+    }
+
+    if (!reply) {
+      return res.status(500).json({ error: 'All AI providers are currently unavailable. Please try again in a moment.' });
     }
 
     res.json({ message: reply });
 
   } catch (error) {
     console.error('API Error:', error.message);
-    res.status(500).json({ error: 'AI error: ' + error.message });
+    res.status(500).json({ error: 'Server error. Please try again.' });
   }
 });
 
