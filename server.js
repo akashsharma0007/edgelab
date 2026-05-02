@@ -96,6 +96,8 @@ const ESPN_ENDPOINTS = [
   { label: '⚽ SERIE A',          url: 'https://site.api.espn.com/apis/site/v2/sports/soccer/ita.1/scoreboard' },
   { label: '⚽ LIGUE 1',          url: 'https://site.api.espn.com/apis/site/v2/sports/soccer/fra.1/scoreboard' },
   { label: '⚽ MLS',              url: 'https://site.api.espn.com/apis/site/v2/sports/soccer/usa.1/scoreboard' },
+  { label: '🏏 IPL',              url: 'https://site.api.espn.com/apis/site/v2/sports/cricket/8676/scoreboard' },
+  { label: '🏏 CRICKET (INT)',    url: 'https://site.api.espn.com/apis/site/v2/sports/cricket/scoreboard' },
   { label: '🏀 NBA',              url: 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard' },
   { label: '🎾 ATP TENNIS',       url: 'https://site.api.espn.com/apis/site/v2/sports/tennis/atp/scoreboard' },
   { label: '🎾 WTA TENNIS',       url: 'https://site.api.espn.com/apis/site/v2/sports/tennis/wta/scoreboard' },
@@ -603,25 +605,41 @@ app.get('/api/fixtures', authMiddleware, async (_req, res) => {
 
 // ─── AI CALL FUNCTIONS ────────────────────────────────────────────────────────
 
+const OPENROUTER_MODELS = [
+  'meta-llama/llama-3.3-70b-instruct:free',
+  'deepseek/deepseek-r1:free',
+  'qwen/qwen3-235b-a22b:free',
+  'mistralai/mistral-7b-instruct:free',
+];
+
 async function callOpenRouter(systemPrompt, messages) {
-  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': 'https://web-production-4aaf7.up.railway.app',
-      'X-Title': 'EdgeLab',
-    },
-    body: JSON.stringify({
-      model: 'meta-llama/llama-3.3-70b-instruct:free',
-      max_tokens: 2048,
-      messages: [{ role: 'system', content: systemPrompt }, ...messages],
-    }),
-    signal: AbortSignal.timeout(30000),
-  });
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message || 'OpenRouter error');
-  return data.choices[0].message.content;
+  let lastError = '';
+  for (const model of OPENROUTER_MODELS) {
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://web-production-4aaf7.up.railway.app',
+          'X-Title': 'EdgeLab',
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 2048,
+          messages: [{ role: 'system', content: systemPrompt }, ...messages],
+        }),
+        signal: AbortSignal.timeout(30000),
+      });
+      const data = await res.json();
+      if (data.error) { lastError = data.error.message; console.warn(`[OpenRouter] ${model} failed: ${lastError}`); continue; }
+      const reply = data.choices?.[0]?.message?.content;
+      if (!reply) { lastError = 'Empty response'; continue; }
+      console.log(`[OpenRouter] using ${model}`);
+      return reply;
+    } catch (e) { lastError = e.message; }
+  }
+  throw new Error('All OpenRouter models unavailable: ' + lastError);
 }
 
 async function callGroq(systemPrompt, messages) {
